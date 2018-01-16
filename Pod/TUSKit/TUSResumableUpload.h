@@ -30,6 +30,11 @@ typedef void (^TUSUploadProgressBlock)(int64_t bytesWritten, int64_t bytesTotal)
 @property (readwrite, copy) _Nullable TUSUploadProgressBlock progressBlock;
 
 /**
+ The number of retries TUS can try before failing
+ */
+@property NSInteger allowedRetries;
+
+/**
  The unique ID for the upload object
  */
 @property (readonly) NSString * _Nonnull uploadId;

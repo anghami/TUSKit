@@ -29,6 +29,7 @@
 #define HTTP_TUS @"Tus-Resumable"
 #define HTTP_TUS_VERSION @"1.0.0"
 
+#define HTTP_COOKIE @"Set-Cookie"
 #define HTTP_LOCATION @"Location"
 #define REQUEST_TIMEOUT 30
 // Delay time in seconds between retries
@@ -55,6 +56,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
 @property (readwrite) TUSResumableUploadState state;
 
 // Internal state
+@property (nonatomic) NSInteger attemptedRetries;
 @property (nonatomic) BOOL cancelled;
 @property (nonatomic) BOOL stopped;
 @property (nonatomic, weak) id<TUSResumableUploadDelegate> delegate; // Current upload offset
@@ -62,6 +64,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
 @property (nonatomic, strong) NSURL *uploadUrl; // Target URL for file
 @property (nonatomic, strong) NSDictionary *uploadHeaders;
 @property (nonatomic, strong) NSDictionary <NSString *, NSString *> *metadata;
+@property (nonatomic, strong) NSString * requestCookie;
 @property (nonatomic, strong) TUSData *data;
 @property (nonatomic, strong) NSURLSessionTask *currentTask; // Nonatomic because we know we will assign it, then start the thread that will remove it.
 @property (nonatomic, strong) NSURL *fileUrl; // File URL for saving if we created our own TUSData
@@ -220,6 +223,14 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     }
 }
 
+- (NSDictionary *)cookiesDict {
+    NSString * cookieToUse = self.requestCookie;
+    if (cookieToUse.hasValue) {
+        return @{@"Cookie" : cookieToUse};
+    }
+    return nil;
+}
+
 #pragma mark private methods
 -(BOOL)continueUpload
 {
@@ -265,7 +276,8 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     
     // Add custom headers after the filename, as the upload-metadata may be customized
     [mutableHeader addEntriesFromDictionary:[self uploadHeaders]];
-    
+    [mutableHeader addEntriesFromDictionary:[self cookiesDict]];
+
     // Set the version & length last as they are determined by the uploader
     [mutableHeader setObject:[NSString stringWithFormat:@"%lld", size] forKey:HTTP_UPLOAD_LENGTH];
     [mutableHeader setObject:HTTP_TUS_VERSION forKey:HTTP_TUS];
@@ -275,17 +287,16 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
                                                                 cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                             timeoutInterval:REQUEST_TIMEOUT];
     [request setHTTPMethod:HTTP_POST];
-    [request setHTTPShouldHandleCookies:NO];
     [request setAllHTTPHeaderFields:mutableHeader];
     
     __weak TUSResumableUpload * weakself = self;
     
-    #if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE
     UIBackgroundTaskIdentifier bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
         [weakself cancel];
     }];
-    #endif
-
+#endif
+    
     self.currentTask = [self.delegate.session dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error){
         if (weakself.currentTask){ // Should only be false if self has been destroyed, but we need to account for that because of the removeTask call.
             [weakself.delegate removeTask:weakself.currentTask];
@@ -303,41 +314,36 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
                 case NSURLErrorUnsupportedURL:
                 case NSURLErrorCannotFindHost:
                     TUSLog(@"Unrecoverable error during attempt to create file");
-                    if([weakself stop]){
-                        TUSUploadFailureBlock block = weakself.failureBlock;
-                        if (block){
-                            [[NSOperationQueue currentQueue] addOperationWithBlock:^{
-                                block(error);
-                            }];
-                        }
-                    }
+                    [weakself failWithError:error];
                     break;
-                default:
-                    //TODO: Fail after a certain number of delayed attempts
-                    delayTime = DELAY_TIME;
+                default: {
+                    BOOL retryAllowed = [self incrementAndCheckFailures];
+                    if (!retryAllowed) {
+                        [weakself failWithError:error];
+                    } else {
+                        delayTime = DELAY_TIME;
+                    }
                     TUSLog(@"Error or no response during attempt to create file, retrying");
+                }
             }
         } else if (httpResponse.statusCode >= 500 && httpResponse.statusCode < 600) {
             TUSLog(@"Server error, stopping");
-            [weakself stop]; // Will prevent continueUpload from doing anything
-            // Make the callback after the current operation so that the rest of the method will finish.
-            // Store the block so that we know it will be non-nil in the closure.
-            TUSUploadFailureBlock block = weakself.failureBlock;
-            if (block) {
-                NSInteger statusCode = httpResponse.statusCode;
-                [[NSOperationQueue currentQueue] addOperationWithBlock:^{
-                    block([[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:@{@"responseCode": @(statusCode)}]);
-                }];
-            }
+            NSInteger statusCode = httpResponse.statusCode;
+            [self failWithError:[[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:@{@"responseCode": @(statusCode)}]];
         } else if (httpResponse.statusCode < 200 || httpResponse.statusCode > 204){
-            //TODO: FAIL after a certain number of errors.
-            delayTime = DELAY_TIME;
+            BOOL retryAllowed = [self incrementAndCheckFailures];
+            if (!retryAllowed) {
+                [weakself failWithError:[[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:@{@"responseCode": @(httpResponse.statusCode)}]];
+            } else {
+                delayTime = DELAY_TIME;
+            }
             TUSLog(@"Server responded to create file with %ld. Trying again",
                    (long)httpResponse.statusCode);
         } else {
             // Got a valid status code, so update url
             NSString *location = [httpResponse.allHeaderFields valueForKey:HTTP_LOCATION];
             weakself.uploadUrl = [NSURL URLWithString:location relativeToURL:createUploadURL];
+            weakself.requestCookie = [httpResponse.allHeaderFields valueForKey:HTTP_COOKIE];
             if (weakself.uploadUrl) {
                 // If we got a valid URL, set the new state to uploading.  Otherwise, will try creating again.k
                 TUSLog(@"Created resumable upload at %@ for id %@", weakself.uploadUrl, weakself.uploadId);
@@ -346,11 +352,11 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
         }
         weakself.idle = YES;
         [weakself.delegate saveUpload:weakself]; // Save current state for reloading - only save when we get a call back, not at the start of one (because this is the only time the state changes)
-        #if TARGET_OS_IPHONE
-            [[UIApplication sharedApplication] endBackgroundTask:bgTask];
-        #elif defined TARGET_OS_OSX
-            [weakself cancel];
-        #endif
+#if TARGET_OS_IPHONE
+        [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+#elif defined TARGET_OS_OSX
+        [weakself cancel];
+#endif
         
         if (delayTime > 0) {
             __weak NSOperationQueue *weakQueue = [NSOperationQueue currentQueue];
@@ -370,8 +376,6 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     return YES;
 }
 
-
-
 - (BOOL) checkFile
 {
     self.state = TUSResumableUploadStateCheckingFile;
@@ -379,21 +383,21 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     NSMutableDictionary *mutableHeader = [NSMutableDictionary dictionary];
     [mutableHeader addEntriesFromDictionary:[self uploadHeaders]];
     [mutableHeader setObject:HTTP_TUS_VERSION forKey:HTTP_TUS];
-    
+    [mutableHeader addEntriesFromDictionary:[self cookiesDict]];
+
     NSMutableURLRequest *request = [[NSMutableURLRequest alloc] initWithURL:self.uploadUrl
                                                                 cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                             timeoutInterval:REQUEST_TIMEOUT];
     
     [request setHTTPMethod:HTTP_HEAD];
-    [request setHTTPShouldHandleCookies:NO];
     [request setAllHTTPHeaderFields:mutableHeader];
     
     __weak TUSResumableUpload * weakself = self;
-    #if TARGET_OS_IPHONE
-        UIBackgroundTaskIdentifier bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
+#if TARGET_OS_IPHONE
+    UIBackgroundTaskIdentifier bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
         [weakself cancel];
-        }];
-    #endif
+    }];
+#endif
     self.currentTask = [self.delegate.session dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error){
         if (weakself.currentTask){ // Should only be false if self has been destroyed, but we need to account for that because of the removeTask call.
             [weakself.delegate removeTask:weakself.currentTask];
@@ -410,38 +414,34 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
                 case NSURLErrorUnsupportedURL:
                 case NSURLErrorCannotFindHost:
                     TUSLog(@"Unrecoverable error during attempt to check file");
-                    if([weakself stop]){
-                        TUSUploadFailureBlock block = weakself.failureBlock;
-                        if (block){
-                            [[NSOperationQueue currentQueue] addOperationWithBlock:^{
-                                block(error);
-                            }];
-                        }
-                    }
+                    [weakself failWithError:error];
                     break;
                 case NSURLErrorTimedOut:
                 case NSURLErrorNotConnectedToInternet:
-                default:
-                    //TODO: Fail after a certain number of delayed attempts
-                    delayTime = DELAY_TIME;
+                default: {
+                    BOOL retryAllowed = [self incrementAndCheckFailures];
+                    if (!retryAllowed) {
+                        [weakself failWithError:error];
+                    } else {
+                        delayTime = DELAY_TIME;
+                    }
                     TUSLog(@"Error or no response during attempt to check file, retrying");
+                }
             }
         } else if (httpResponse.statusCode == 423) {
             // We only check 423 errors in checkFile because the other methods will properly handle locks with their generic error handling.
             TUSLog(@"File is locked, waiting and retrying");
-            delayTime = DELAY_TIME; // Delay to wait for locks.
+            BOOL retryAllowed = [self incrementAndCheckFailures];
+            if (!retryAllowed) {
+                NSError * error = [[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:@{@"responseCode": @(httpResponse.statusCode)}];
+                [weakself failWithError:error];
+            } else {
+                delayTime = DELAY_TIME; // Delay to wait for locks.
+            }
         } else if (httpResponse.statusCode >= 500 && httpResponse.statusCode < 600) {
             TUSLog(@"Server error, stopping");
-            [weakself stop]; // Will prevent continueUpload from doing anything
-            // Make the callback after the current operation so that the rest of the method will finish.
-            // Store the block so that we know it will be non-nil in the closure.
-            TUSUploadFailureBlock block = weakself.failureBlock;
-            if (block) {
-                NSInteger statusCode = httpResponse.statusCode;
-                [[NSOperationQueue currentQueue] addOperationWithBlock:^{
-                    block([[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:@{@"responseCode": @(statusCode)}]);
-                }];
-            }
+            NSInteger statusCode = httpResponse.statusCode;
+            [weakself failWithError:[[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:@{@"responseCode": @(statusCode)}]];
         } else if (httpResponse.statusCode < 200 || httpResponse.statusCode > 204){
             TUSLog(@"Server responded to file check with %ld. Creating file",
                    (long)httpResponse.statusCode);
@@ -452,11 +452,11 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
         }
         weakself.idle = YES;
         [weakself.delegate saveUpload:weakself]; // Save current state for reloading - only save when we get a call back, not at the start of one (because this is the only time the state changes)
-        #if TARGET_OS_IPHONE
-            [[UIApplication sharedApplication] endBackgroundTask:bgTask];
-        #elif defined TARGET_OS_OSX
-            [weakself cancel];
-        #endif
+#if TARGET_OS_IPHONE
+        [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+#elif defined TARGET_OS_OSX
+        [weakself cancel];
+#endif
         if (delayTime > 0) {
             __weak NSOperationQueue *weakQueue = [NSOperationQueue currentQueue];
             // Delay some time before we try again.  We use a weak queue pointer because if the queue goes away, presumably the session has too (the session should have a strong pointer to the queue).
@@ -484,6 +484,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     [mutableHeader setObject:[NSString stringWithFormat:@"%lld", self.offset] forKey:HTTP_OFFSET];
     [mutableHeader setObject:HTTP_TUS_VERSION forKey:HTTP_TUS];
     [mutableHeader setObject:@"application/offset+octet-stream" forKey:@"Content-Type"];
+    [mutableHeader addEntriesFromDictionary:[self cookiesDict]];
 
     TUSLog(@"Resuming upload to %@ with id %@ from offset %lld",
            self.uploadUrl, self.uploadId, self.offset);
@@ -492,18 +493,17 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
                                                                 cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                             timeoutInterval:REQUEST_TIMEOUT];
     [request setHTTPMethod:HTTP_PATCH];
-    [request setHTTPShouldHandleCookies:NO];
     [request setAllHTTPHeaderFields:mutableHeader];
     [self.data setOffset:self.offset]; // Advance the offset of data to the expected value
     request.HTTPBodyStream = self.data.dataStream;
     
     
     __weak TUSResumableUpload * weakself = self;
-    #if TARGET_OS_IPHONE
-        UIBackgroundTaskIdentifier bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
-            [weakself cancel];
-        }];
-    #endif
+#if TARGET_OS_IPHONE
+    UIBackgroundTaskIdentifier bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
+        [weakself cancel];
+    }];
+#endif
     self.currentTask = [self.delegate.session dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error){
         if (weakself.currentTask){ // Should only be false if self has been destroyed, but we need to account for that because of the removeTask call.
             [weakself.delegate removeTask:weakself.currentTask];
@@ -520,16 +520,10 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
         } else if (httpResponse.statusCode >= 500 && httpResponse.statusCode < 600) {
             TUSLog(@"Server error, stopping");
             weakself.state = TUSResumableUploadStateCheckingFile;
-            [weakself stop]; // Will prevent continueUpload from doing anything
             // Make the callback after the current operation so that the rest of the method will finish.
             // Store the block so that we know it will be non-nil in the closure.
-            TUSUploadFailureBlock block = weakself.failureBlock;
-            if (block) {
-                NSInteger statusCode = httpResponse.statusCode;
-                [[NSOperationQueue currentQueue] addOperationWithBlock:^{
-                    block([[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:@{@"responseCode": @(statusCode)}]);
-                }];
-            }
+            NSInteger statusCode = httpResponse.statusCode;
+            [weakself failWithError:[[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:@{@"responseCode": @(statusCode)}]];
         } else if (httpResponse.statusCode < 200 || httpResponse.statusCode > 204){
             TUSLog(@"Invalid status code (%ld) during attempt to upload, checking state", (long)httpResponse.statusCode);
             // No need to delay, because we are changing states: if there is a network or server error, it will delay in the checking state
@@ -540,11 +534,11 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
         }
         weakself.idle = YES;
         [weakself.delegate saveUpload:weakself]; // Save current state for reloading - only save when we get a call back, not at the start of one (because this is the only time the state changes)
-        #if TARGET_OS_IPHONE
-            [[UIApplication sharedApplication] endBackgroundTask:bgTask];
-        #elif defined TARGET_OS_OSX
-            [weakself cancel];
-        #endif
+#if TARGET_OS_IPHONE
+        [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+#elif defined TARGET_OS_OSX
+        [weakself cancel];
+#endif
         [weakself continueUpload]; // Continue upload, not resume, because we do not want to continue if cancelled.
     }];
     [self.delegate addTask:self.currentTask forUpload:self];
@@ -574,8 +568,18 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
         } else {
             TUSLog(@"Resumable upload at %@ for %@ from %lld (%@)",
                    self.uploadUrl, self.uploadId, serverOffset, rangeHeader);
-            self.offset = serverOffset;
-            self.state = TUSResumableUploadStateUploadingFile;
+            if (self.offset == serverOffset && serverOffset == 0) {
+                BOOL retryAllowed = [self incrementAndCheckFailures];
+                if (!retryAllowed) {
+                    [self failWithError:[[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:nil]];
+                    return;
+                }
+                self.offset = serverOffset;
+                self.state = TUSResumableUploadStateUploadingFile;
+            }
+            else {
+                self.state = TUSResumableUploadStateCheckingFile;
+            }
         }
     } else {
         TUSLog(@"No header received during request for %@, so checking file", self.uploadUrl);
@@ -659,7 +663,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
         }
     } else if (state != TUSResumableUploadStateComplete) { // If we do not have a file url and the upload isn't complete, then we were reloading using the wrong method.
         NSLog(@"Attempt to reload non-file upload using file-based upload restore method");
-        //TODO: Implement code to resume a non-file-based upload
+        [self incrementAndCheckFailures];
         return nil;
     }
     
@@ -677,4 +681,28 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
                         uploadUrl:uploadUrl];
 }
 
+#pragma mark - Failure Handling
+
+- (BOOL)incrementAndCheckFailures
+{
+    self.attemptedRetries += 1;
+    if (self.attemptedRetries > self.allowedRetries) {
+        return NO;
+    }
+    return YES;
+}
+
+- (void)failWithError:(NSError *)error
+{
+    if([self stop]){
+        TUSUploadFailureBlock block = self.failureBlock;
+        if (block){
+            [[NSOperationQueue currentQueue] addOperationWithBlock:^{
+                block(error);
+            }];
+        }
+    }
+}
+
 @end
+
