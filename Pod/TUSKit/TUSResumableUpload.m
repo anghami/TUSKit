@@ -277,7 +277,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     // Add custom headers after the filename, as the upload-metadata may be customized
     [mutableHeader addEntriesFromDictionary:[self uploadHeaders]];
     [mutableHeader addEntriesFromDictionary:[self cookiesDict]];
-
+    
     // Set the version & length last as they are determined by the uploader
     [mutableHeader setObject:[NSString stringWithFormat:@"%lld", size] forKey:HTTP_UPLOAD_LENGTH];
     [mutableHeader setObject:HTTP_TUS_VERSION forKey:HTTP_TUS];
@@ -384,7 +384,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     [mutableHeader addEntriesFromDictionary:[self uploadHeaders]];
     [mutableHeader setObject:HTTP_TUS_VERSION forKey:HTTP_TUS];
     [mutableHeader addEntriesFromDictionary:[self cookiesDict]];
-
+    
     NSMutableURLRequest *request = [[NSMutableURLRequest alloc] initWithURL:self.uploadUrl
                                                                 cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                             timeoutInterval:REQUEST_TIMEOUT];
@@ -485,7 +485,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     [mutableHeader setObject:HTTP_TUS_VERSION forKey:HTTP_TUS];
     [mutableHeader setObject:@"application/offset+octet-stream" forKey:@"Content-Type"];
     [mutableHeader addEntriesFromDictionary:[self cookiesDict]];
-
+    
     TUSLog(@"Resuming upload to %@ with id %@ from offset %lld",
            self.uploadUrl, self.uploadId, self.offset);
     
@@ -568,7 +568,8 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
         } else {
             TUSLog(@"Resumable upload at %@ for %@ from %lld (%@)",
                    self.uploadUrl, self.uploadId, serverOffset, rangeHeader);
-            if (self.offset == serverOffset && serverOffset == 0) {
+            if ((self.offset == serverOffset && serverOffset == 0) ||
+                self.state == TUSResumableUploadStateCheckingFile) {
                 BOOL retryAllowed = [self incrementAndCheckFailures];
                 if (!retryAllowed) {
                     [self failWithError:[[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:nil]];
@@ -705,4 +706,3 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
 }
 
 @end
-
