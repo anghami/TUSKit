@@ -359,13 +359,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
 #endif
         
         if (delayTime > 0) {
-            __weak NSOperationQueue *weakQueue = [NSOperationQueue currentQueue];
-            // Delay some time before we try again.  We use a weak queue pointer because if the queue goes away, presumably the session has too (the session should have a strong pointer to the queue).
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayTime * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ // We use the main queue instead of this queue because we do not know this NSOperationQueue's GCD queue.
-                [weakQueue addOperationWithBlock:^{
-                    [weakself continueUpload]; // Continue upload on the queue all of the upload operations are on.
-                }];
-            });
+            [weakself retryUploadAfterDelay:delayTime];
         } else {
             [weakself continueUpload]; // Continue upload on the queue we were previously on.
         }
@@ -374,6 +368,17 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     self.idle = NO;
     [self.currentTask resume]; // Now everything done on currentTask will be done in the callbacks.
     return YES;
+}
+
+- (void)retryUploadAfterDelay:(NSUInteger)delayTime
+{
+    __weak NSOperationQueue *weakQueue = [NSOperationQueue currentQueue];
+    // Delay some time before we try again.  We use a weak queue pointer because if the queue goes away, presumably the session has too (the session should have a strong pointer to the queue).
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayTime * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ // We use the main queue instead of this queue because we do not know this NSOperationQueue's GCD queue.
+        [weakQueue addOperationWithBlock:^{
+            [self continueUpload]; // Continue upload on the queue all of the upload operations are on.
+        }];
+    });
 }
 
 - (BOOL) checkFile
@@ -458,13 +463,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
         [weakself cancel];
 #endif
         if (delayTime > 0) {
-            __weak NSOperationQueue *weakQueue = [NSOperationQueue currentQueue];
-            // Delay some time before we try again.  We use a weak queue pointer because if the queue goes away, presumably the session has too (the session should have a strong pointer to the queue).
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayTime * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ // We use the main queue instead of this queue because we do not know this NSOperationQueue's GCD queue.
-                [weakQueue addOperationWithBlock:^{
-                    [weakself continueUpload]; // Continue upload on the queue all of the upload operations are on.
-                }];
-            });
+            [weakself retryUploadAfterDelay:delayTime];
         } else {
             [weakself continueUpload]; // Continue upload on the queue we were previously on.
         }
@@ -575,11 +574,11 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
                     [self failWithError:[[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:nil]];
                     return;
                 }
-                self.offset = serverOffset;
-                self.state = TUSResumableUploadStateUploadingFile;
+                [self retryUploadAfterDelay:DELAY_TIME];
             }
             else {
-                self.state = TUSResumableUploadStateCheckingFile;
+                self.offset = serverOffset;
+                self.state = TUSResumableUploadStateUploadingFile;
             }
         }
     } else {
