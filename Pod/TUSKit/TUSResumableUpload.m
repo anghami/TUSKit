@@ -567,8 +567,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
         } else {
             TUSLog(@"Resumable upload at %@ for %@ from %lld (%@)",
                    self.uploadUrl, self.uploadId, serverOffset, rangeHeader);
-            if ((self.offset == serverOffset && serverOffset == 0) ||
-                self.state == TUSResumableUploadStateCheckingFile) {
+            if (self.offset == serverOffset && serverOffset == 0) {
                 BOOL retryAllowed = [self incrementAndCheckFailures];
                 if (!retryAllowed) {
                     [self failWithError:[[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:nil]];
