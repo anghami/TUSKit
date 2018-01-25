@@ -30,14 +30,14 @@ typedef void (^TUSUploadProgressBlock)(int64_t bytesWritten, int64_t bytesTotal)
 @property (readwrite, copy) _Nullable TUSUploadProgressBlock progressBlock;
 
 /**
- The number of retries TUS can try before failing
- */
-@property NSInteger allowedRetries;
-
-/**
  The unique ID for the upload object
  */
 @property (readonly) NSString * _Nonnull uploadId;
+
+/**
+ The number of times to retry with the delay between each retry
+ */
+@property (strong, nonatomic) NSArray * _Nullable retriesDelaysArray;
 
 /**
  The upload is complete if the file has been completely uploaded to the TUS server
