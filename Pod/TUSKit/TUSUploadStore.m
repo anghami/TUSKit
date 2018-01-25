@@ -43,8 +43,9 @@
 {
     while(1) {
         NSUUID *uuid = [[NSUUID alloc] init];
-        if(![self containsUploadWithIdentifier:uuid.UUIDString])
-            return uuid.UUIDString;
+        NSString * uploadString = [NSString stringWithFormat:@"%@%f%d", uuid.UUIDString, [[NSDate date]timeIntervalSince1970], arc4random()%10];
+        if(![self containsUploadWithIdentifier:uploadString])
+            return uploadString;
     }
 }
 @end

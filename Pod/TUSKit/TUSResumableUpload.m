@@ -574,12 +574,9 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
                     [self failWithError:[[NSError alloc] initWithDomain:TUSErrorDomain code:TUSResumableUploadErrorServer userInfo:nil]];
                     return;
                 }
-                [self retryUploadAfterDelay:DELAY_TIME];
             }
-            else {
-                self.offset = serverOffset;
-                self.state = TUSResumableUploadStateUploadingFile;
-            }
+            self.offset = serverOffset;
+            self.state = TUSResumableUploadStateUploadingFile;
         }
     } else {
         TUSLog(@"No header received during request for %@, so checking file", self.uploadUrl);
