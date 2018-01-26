@@ -218,7 +218,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     if (_retriesDelaysArray) {
         return _retriesDelaysArray;
     }
-    return @[@(5), @(10), @(15)];
+    return @[@(5), @(10), @(15), @(15)];
 }
 
 #pragma mark internal methods
@@ -587,7 +587,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
 
 - (void)resetRetryCount
 {
-    self.numberOfRetries = 0;
+//    self.numberOfRetries = 0;
 }
 
 #pragma mark private and internal persistence functions
