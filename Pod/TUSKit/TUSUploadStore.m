@@ -6,6 +6,7 @@
 
 #import "TUSUploadStore.h"
 #import "TUSResumableUpload.h"
+#import "NSString+Utils.h"
 
 @interface TUSUploadStore ()
 @end
@@ -41,11 +42,6 @@
 
 -(NSString *)generateUploadId
 {
-    while(1) {
-        NSUUID *uuid = [[NSUUID alloc] init];
-        NSString * uploadString = [NSString stringWithFormat:@"%@%f%d", uuid.UUIDString, [[NSDate date]timeIntervalSince1970], arc4random()%10];
-        if(![self containsUploadWithIdentifier:uploadString])
-            return uploadString;
-    }
+    return [NSString stringWithFormat:@"%@-%f", [NSString randomStringOfLength:15], [[NSDate date]timeIntervalSince1970]];
 }
 @end
