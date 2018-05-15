@@ -20,10 +20,12 @@
 -(instancetype)initWithFileURL:(NSURL *)url
 {
     // Check file first
+    DDLogVerbose(@"[%@] TUS Upload: checking readability", THIS_FILE);
     if (![[NSFileManager defaultManager] isReadableFileAtPath:url.path]){
         return nil;
     }
     
+    DDLogVerbose(@"[%@] TUS Upload: checked readability", THIS_FILE);
     self = [super init];
     if (self){
         self.fileURL = url;

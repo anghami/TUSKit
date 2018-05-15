@@ -46,10 +46,14 @@
 -(BOOL)saveUpload:(TUSResumableUpload *)upload
 {
     self.uploads[upload.uploadId] = upload;
+    DDLogVerbose(@"[%@] TUS upload: searializing", THIS_FILE);
     NSDictionary *newSerialized = [upload serialize];
+    DDLogVerbose(@"[%@] TUS upload: serialized", THIS_FILE);
     if (![self.serializedUploads[upload.uploadId] isEqualToDictionary:newSerialized]){
         self.serializedUploads[upload.uploadId] = newSerialized;
+        DDLogVerbose(@"[%@] TUS upload: writing to url", THIS_FILE);
         [self.serializedUploads writeToURL:self.fileURL atomically:YES];
+        DDLogVerbose(@"[%@] TUS upload: wrote to url", THIS_FILE);
     }
     return YES;
 }

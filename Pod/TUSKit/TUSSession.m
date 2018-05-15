@@ -86,8 +86,11 @@
                                        headers:(NSDictionary <NSString *, NSString *> * __nullable)headers
                                       metadata:(NSDictionary <NSString *, NSString *> * __nullable)metadata
 {
-    TUSResumableUpload *upload = [[TUSResumableUpload alloc]  initWithUploadId:[self.store generateUploadId] file:fileURL delegate:self uploadHeaders:headers?:@{} metadata:metadata];
-    
+    DDLogVerbose(@"[%@] TUS Upload: Creating uploadID", THIS_FILE);
+    NSString * uploadID = [self.store generateUploadId];
+    DDLogVerbose(@"[%@] TUS Upload: Created uploadID %@", THIS_FILE, uploadID);
+    TUSResumableUpload *upload = [[TUSResumableUpload alloc]  initWithUploadId:uploadID file:fileURL delegate:self uploadHeaders:headers?:@{} metadata:metadata];
+    DDLogVerbose(@"[%@] TUS Upload: Created TUSResumableUpload", THIS_FILE);
     if (upload){
         self.uploads[upload.uploadId] = upload; // Save the upload by ID for later
     }

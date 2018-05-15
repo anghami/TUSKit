@@ -111,11 +111,13 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
                                   metadata:(NSDictionary <NSString *, NSString *>* _Nullable)metadata
 
 {
+    DDLogVerbose(@"[%@] TUS Upload: init upload", THIS_FILE);
     if (!fileUrl.fileURL){
         NSLog(@"URL provided to TUSResumableUpload is not a file URL: %@", fileUrl);
         return nil;
     }
     
+    DDLogVerbose(@"[%@] TUS Upload: init upload with dict", THIS_FILE);
     // Set up metadata with filename
     NSMutableDictionary *uploadMetadata = [NSMutableDictionary new];
     uploadMetadata[@"filename"] = fileUrl.filePathURL.lastPathComponent;
@@ -156,15 +158,19 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
         _state = state;
         _uploadUrl = uploadUrl;
         _idle = YES;
-        
+        DDLogVerbose(@"[%@] TUS Upload: checking state", THIS_FILE);
         if (_state != TUSResumableUploadStateComplete){
             _data = [[TUSFileData alloc] initWithFileURL:fileUrl];
+            DDLogVerbose(@"[%@] TUS Upload: created data", THIS_FILE);
             if (!_data){
                 NSLog(@"Error creating TUSFileData object with url %@", fileUrl);
+                DDLogVerbose(@"[%@] TUS Upload: No data", THIS_FILE);
                 return nil;
             }
         }
+        DDLogVerbose(@"[%@] TUS Upload: checked state", THIS_FILE);
         [self.delegate saveUpload:self];
+        DDLogVerbose(@"[%@] TUS Upload: saved upload", THIS_FILE);
     }
     return self;
 }
