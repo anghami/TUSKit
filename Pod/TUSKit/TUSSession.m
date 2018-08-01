@@ -137,9 +137,14 @@
             cancelled++;
         }
     }
+    [self invalidateAndCancelURLSession];
+    return cancelled;
+}
+
+- (void)invalidateAndCancelURLSession
+{
     [self.session invalidateAndCancel];
     self.session = nil;
-    return cancelled;
 }
 
 -(NSUInteger)stopAll
@@ -150,8 +155,7 @@
             stopped++;
         }
     }
-    [self.session invalidateAndCancel];
-    self.session = nil;
+    [self invalidateAndCancelURLSession];
     return stopped;
 }
 

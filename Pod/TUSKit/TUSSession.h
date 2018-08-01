@@ -60,6 +60,11 @@
 -(NSUInteger)stopAll;
 
 /**
+ Invalidates the URL Session
+ */
+- (void)invalidateAndCancelURLSession;
+
+/**
  Resume all in-memory uploads.  Return all that have been restarted.
  Uploads that were already in-progress are not returned.
  
