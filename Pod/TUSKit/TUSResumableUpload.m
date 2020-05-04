@@ -602,13 +602,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
 {
     NSObject *fileUrlData = [NSNull null];
     if (self.fileUrl){
-        NSError *error;
-        NSData *bookmarkData = [self.fileUrl bookmarkDataWithOptions:NSURLBookmarkCreationMinimalBookmark includingResourceValuesForKeys:nil relativeToURL:nil error:&error];
-        if (error != nil){
-            NSLog(@"Error creating bookmark data for URL %@", error);
-        } else {
-            fileUrlData = bookmarkData;
-        }
+        fileUrlData = self.fileUrl;
     }
     
     return @{STORE_KEY_ID: self.uploadId,
@@ -647,7 +641,7 @@ typedef void(^NSURLSessionTaskCompletionHandler)(NSData * _Nullable data, NSURLR
     NSURL *fileUrl = nil;
     if(serializedUpload[STORE_KEY_FILE_URL] != [NSNull null]){
         NSError *error;
-        fileUrl = [NSURL URLByResolvingBookmarkData:serializedUpload[STORE_KEY_FILE_URL] options:0 relativeToURL:nil bookmarkDataIsStale:nil error:&error];
+        fileUrl = serializedUpload[STORE_KEY_FILE_URL];
         if (error != nil){ // Assuming fileUrl must be non-nil if there is no error
             NSLog(@"Error loading file URL from stored data for upload %@", uploadId);
             return nil;
